@@ -3,8 +3,8 @@
 # Author: Uros Orozel
 # Date: 10/10/2017
 # Desc: This script will retrive Opestack server metadata key raw_disk_serials
-# loop over all disk serial numbers which are listed with lsblk and then try 
-# attach raw device name to same virtual server with virtsh 
+# loop over all disk serial numbers which are listed with lsblk and then try
+# attach raw device name to same virtual server with virtsh
 
 from keystoneauth1 import loading
 from keystoneauth1 import session
@@ -14,15 +14,34 @@ from subprocess import Popen, PIPE
 import sys
 import os
 import re
-import syslog
-import xml.etree.ElementTree as ET
-
+import logging
+import logging.handlers
 import urllib3
 urllib3.disable_warnings()
 
-'''Openrc path'''
+'''Constants'''
+LOG_FILENAME = "/var/log/nova/attach_raw_device.log"
 OPENRC = "/root/openrc"
 RAW_DISK_META_KEY = "raw_disk_serials"
+
+
+def set_logging(logfile, log_level):
+    log = logging.getLogger()
+    log.setLevel(logging.INFO)
+    format = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+
+    if log_level == "DEBUG":
+        ch = logging.StreamHandler()
+        ch.setFormatter(format)
+        log.addHandler(ch)
+
+    fh = logging.handlers.RotatingFileHandler(
+        logfile, maxBytes=(1048576 * 5), backupCount=7)
+    fh.setFormatter(format)
+    log.addHandler(fh)
+    return log
+
 
 def source_file(script, update=True, clean=True):
     global environ
@@ -71,6 +90,9 @@ def find_raw_disk(serial):
             device_name = line.split()[0]
             return device_name
 
+    logger.info('Device with serial: %s not found!' % serial)
+    return None
+
 
 def find_next_disk(server_uuid):
     pipe = Popen('virsh domblklist %s' % server_uuid, stdout=PIPE,
@@ -85,26 +107,36 @@ def find_next_disk(server_uuid):
 
 def attach_disk(server_uuid, raw_disk_serials):
     for serial in raw_disk_serials.split(','):
-        syslog.syslog('Searching for disk serial: %s' % serial)
+        logger.info('Searching for disk serial: %s' % serial)
         device_name = find_raw_disk(serial)
-        syslog.syslog('Device name for disk with serial: %s is %s'
-                      % (serial, device_name))
+        logger.info('Device name for disk with serial: %s is %s'
+                    % (serial, device_name))
         target_disk = find_next_disk(server_uuid)
-        pipe = \
-            Popen('virsh attach-disk --domain %s --source /dev/%s --type disk --target %s --live'
-                  % (server_uuid, device_name, target_disk),
-                  stdout=PIPE, shell=True)
-        data = pipe.communicate()[0]
+        if device_name is not None:
+            logger.info('Attaching device /dev/%s to Openstack server uuid: %s as device: %s' %
+                        (device_name, server_uuid, target_disk))
+            pipe = \
+                Popen('virsh attach-disk --domain %s --source /dev/%s --type disk --target %s --live'
+                      % (server_uuid, device_name, target_disk),
+                      stdout=PIPE, shell=True)
+            data = pipe.communicate()[0]
 
 
 if len(sys.argv) > 1:
+    logger = set_logging(LOG_FILENAME, "INFO")
     server_uuid = sys.argv[1]
-    syslog.syslog('Executing script: %s' % sys.argv[0])
-    syslog.syslog('Sourcing openrc variables')
+    logger.info('Executing script: %s' % sys.argv[0])
+    logger.info('Sourcing openrc variables')
     source_file(OPENRC)
-    syslog.syslog('Retriving server: %s metadata' % server_uuid)
+    logger.info('Retriving server: %s metadata' % server_uuid)
     server = get_server(server_uuid)
-    raw_disk_serials = server.metadata[RAW_DISK_META_KEY]
-    syslog.syslog('Raw disk metadata for server: %s is: %s'
-                  % (server_uuid, raw_disk_serials))
+    if RAW_DISK_META_KEY in server.metadata.keys():
+        raw_disk_serials = server.metadata[RAW_DISK_META_KEY]
+    else:
+        logger.info('Openstack server object: %s does not have metadata key: %s' % (
+            server_uuid, RAW_DISK_META_KEY))
+        sys.exit(0)
+    logger.info('Raw disk metadata for server: %s is: %s'
+                % (server_uuid, raw_disk_serials))
     attach_disk(server_uuid, raw_disk_serials)
+
