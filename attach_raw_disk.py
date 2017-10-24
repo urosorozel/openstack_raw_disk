@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/openstack/venvs/nova-r14.0.0/bin/python
 # -*- coding: utf-8 -*-
 # Author: Uros Orozel
 # Date: 10/10/2017
@@ -83,7 +83,7 @@ def get_server(server_uuid):
 def find_raw_disk(serial):
     ''' lsblk -o name,serial -dn'''
 
-    pipe = Popen('lsblk1 -o name,serial -dn', stdout=PIPE, shell=True)
+    pipe = Popen('lsblk -o name,serial -dn', stdout=PIPE, shell=True)
     data = pipe.communicate()[0]
     for line in data.splitlines():
         if re.search(serial, line.strip()):
